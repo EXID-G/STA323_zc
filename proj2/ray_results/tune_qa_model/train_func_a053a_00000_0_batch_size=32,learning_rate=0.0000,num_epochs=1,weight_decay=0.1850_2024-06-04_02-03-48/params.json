@@ -1,0 +1,6 @@
+{
+  "batch_size": 32,
+  "learning_rate": 4.4463516351897794e-05,
+  "num_epochs": 1,
+  "weight_decay": 0.18503978160010956
+}
