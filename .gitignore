@@ -17,3 +17,7 @@ ass3/output/
 proj2/data/
 proj2/nlp_flan-t5-small
 proj2/flan-t5-small/
+
+testrjx/
+
+proj2/onnx_models
