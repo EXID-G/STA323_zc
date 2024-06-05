@@ -158,7 +158,7 @@ def tune_transformer(args):
 
     print("Best hyperparameters found were: ", analysis.best_config)
     best_trial = analysis.get_best_trial(metric="eval_loss", mode="min")
-    best_model_path = best_trial.checkpoint.value
+    best_model_path = best_trial.checkpoint.path
 
     shutil.copytree(best_model_path, "/data/lab/Project2/best_model")
     print("The best model has been successfully saved as 'best_model'.")
