@@ -2,6 +2,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["RAY_memory_usage_threshold"] = "0.8"
 os.environ["RAY_memory_monitor_refresh_ms"] = "0"
+
 # 设置环境变量以禁用严格的度量检查
 os.environ["TUNE_DISABLE_STRICT_METRIC_CHECKING"] = "1"
 os.environ["NCCL_P2P_DISABLE"] = "1"
@@ -59,9 +60,9 @@ def load_preprocessed_dataset(path):
     return tmp
 
 def load_and_preprocess_datasets(my_tokenizer,config):
-    train_save_path = '/openbayes/home/data/mydata/preprocessed/train.pkl'
-    val_save_path = '/openbayes/home/data/mydata/preprocessed/val.pkl'
-    test_save_path = '/openbayes/home/data/mydata/preprocessed/test.pkl'
+    train_save_path = config["train_save_path"]
+    val_save_path = config["val_save_path"]
+    test_save_path = config["test_save_path"]
 
     if os.path.exists(train_save_path) and os.path.exists(val_save_path) and os.path.exists(test_save_path):
         train_dataset = load_preprocessed_dataset(train_save_path)
@@ -195,7 +196,10 @@ def tune_transformer(args):
         "weight_decay": tune.uniform(0.0, 0.3),
         "train_file":args.train_file,
         "validation_file":args.validation_file,
-        "test_file":args.test_file
+        "test_file":args.test_file,
+        "train_save_path":args.traindata_process_save_path,
+        "val_save_path":args.valdata_process_save_path,
+        "test_save_path":args.testdata_process_save_path
     }
 
     scheduler = tune.schedulers.ASHAScheduler(
@@ -235,17 +239,20 @@ def tune_transformer(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
+    
     # # 添加命令行参数
-    parser.add_argument("--model_path", type=str, default = "/openbayes/home/flan-t5-small/", help="Path to pre-trained model or shortcut name.")
-    parser.add_argument("--train_file", type=str, default="/openbayes/home/data/mydata/mytrain.csv", help="The input training data file (a csv or json file).")
-    parser.add_argument("--validation_file", type=str, default="/openbayes/home/data/mydata/myvalidation.csv", help="The input validation data file (a csv or json file).")
-    parser.add_argument("--test_file", type=str, default="/openbayes/home/data/mydata/mytest.csv", help="The input test data file (a csv or json file).")
-    parser.add_argument("--output_dir", type=str, default="/openbayes/home/results", help="The output directory where the model predictions and checkpoints will be written.")
-    parser.add_argument("--bestmodel_dir", type=str, default="/openbayes/home/best_model", help="The output directory where the best model will be saved in.")
-    parser.add_argument("--local_dir", type=str, default="/openbayes/home/ray_results/", help="Specifies the local directory path where the tuning results are stored.")
+    parser.add_argument("--model_path", type=str, default = "flan-t5-small/", help="Path to pre-trained model or shortcut name.")
+    parser.add_argument("--train_file", type=str, default="data/mydata/mytrain.csv", help="The input training data file (a csv or json file).")
+    parser.add_argument("--validation_file", type=str, default="data/mydata/myvalidation.csv", help="The input validation data file (a csv or json file).")
+    parser.add_argument("--test_file", type=str, default="data/mydata/mytest.csv", help="The input test data file (a csv or json file).")
+    parser.add_argument("--output_dir", type=str, default="results", help="The output directory where the model predictions and checkpoints will be written.")
+    parser.add_argument("--bestmodel_dir", type=str, default="best_model", help="The output directory where the best model will be saved in.")
+    parser.add_argument("--local_dir", type=str, default="ray_results/", help="Specifies the local directory path where the tuning results are stored.")
+    
+    parser.add_argument("--traindata_process_save_path", type=str, default="data/mydata/preprocessed/train.pkl", help="Specifies the local directory path where the preprocessed data are stored.")
+    parser.add_argument("--valdata_process_save_path", type=str, default="data/mydata/preprocessed/val.pkl", help="Specifies the local directory path where the preprocessed data are stored.")
+    parser.add_argument("--testdata_process_save_path", type=str, default="data/mydata/preprocessed/test.pkl", help="Specifies the local directory path where the preprocessed data are stored.")
     args = parser.parse_args()
     
     ray.init(ignore_reinit_error=True)
     tune_transformer(args)
-    #? python Q1_2.py  --model_name_or_path /STA323_zc/proj2/flan-t5-small --train_file /STA323_zc/proj2/data/mydata/mytrain.csv  --validation_file /STA323_zc/proj2/data/mydata/myvalidation.csv --test_file /STA323_zc/proj2/data/mydata/mytest.csv --output_dir /STA323_zc/proj2/ray_results
