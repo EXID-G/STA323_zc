@@ -1,4 +1,9 @@
 import os
+os.environ["NCCL_P2P_DISABLE"] = "1"
+os.environ["NCCL_IB_DISABLE"] = "1"
+# 设置环境变量以禁用严格的度量检查
+os.environ["TUNE_DISABLE_STRICT_METRIC_CHECKING"] = "1"
+
 import argparse
 import shutil
 import pickle
@@ -18,9 +23,6 @@ from transformers import (
 )
 from datasets import Dataset
 
-# 设置环境变量以禁用严格的度量检查
-os.environ["TUNE_DISABLE_STRICT_METRIC_CHECKING"] = "1"
-
 def load_dataset(train_file, valid_file):
     train_df = pd.read_csv(train_file, keep_default_na=False)
     valid_df = pd.read_csv(valid_file, keep_default_na=False)
@@ -33,7 +35,7 @@ def preprocess_function(examples, tokenizer):
     targets = examples['Output']
 
     model_inputs = tokenizer(inputs, padding='max_length', truncation=True, max_length=384, return_tensors="pt")
-    labels = tokenizer(targets, padding='max_length', truncation=True, max_length=384, return_tensors="pt")
+    labels = tokenizer(targets, padding='max_length', truncation=True, max_length=30, return_tensors="pt")
     model_inputs["labels"] = labels["input_ids"]
     return model_inputs
 
@@ -66,7 +68,7 @@ def train_func(config):
     model = T5ForConditionalGeneration.from_pretrained(model_name)
 
     training_args = Seq2SeqTrainingArguments(
-        output_dir="/data/lab/Project2/results",
+        output_dir=config["output_dir_path"],
         evaluation_strategy="epoch",
         save_strategy="epoch",
         learning_rate=config["learning_rate"],
@@ -87,7 +89,7 @@ def train_func(config):
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
-        data_collator=data_collator,
+        data_collator=data_collator
     )
 
     # Call train method once to train for all epochs
@@ -104,6 +106,7 @@ def train_func(config):
     metrics = {"eval_loss": val_loss, "epoch": config["num_train_epochs"]}
     with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
         trainer.save_model(temp_checkpoint_dir)
+        tokenizer.save_pretrained(temp_checkpoint_dir)
         session.report(
             metrics,
             checkpoint=ray.train.Checkpoint.from_directory(temp_checkpoint_dir),
@@ -114,15 +117,16 @@ def train_func(config):
 def tune_transformer(args):
     tune_config = {
         "learning_rate": tune.loguniform(1e-5, 1e-3),
-        "per_device_train_batch_size": tune.choice([4]),
+        "per_device_train_batch_size": tune.choice([16,32]),
         "per_device_valid_batch_size": 4,
-        "num_train_epochs": tune.choice([1]),
+        "num_train_epochs": tune.choice([2,3,4]),
         "max_steps": 1 if args.smoke_test else -1,
         "train_file": args.train_file,
         "valid_file": args.valid_file,
         "model_name": args.model_name,
         "train_dataset_path": args.train_dataset_path,
-        "valid_dataset_path": args.valid_dataset_path
+        "valid_dataset_path": args.valid_dataset_path,
+        "output_dir_path": args.output_dir_path
     }
 
     reporter = CLIReporter(
@@ -140,8 +144,8 @@ def tune_transformer(args):
         time_attr="training_iteration",
         perturbation_interval=2,
         hyperparam_mutations={
-            "learning_rate": tune.loguniform(1e-5, 1e-4),
-            "per_device_train_batch_size": [4, 8, 16],
+            "learning_rate": tune.loguniform(1e-5, 1e-3),
+            "per_device_train_batch_size": [4, 6, 8],
         }
     )
 
@@ -153,14 +157,15 @@ def tune_transformer(args):
         scheduler=pbt,
         metric="eval_loss",
         mode="min",
-        progress_reporter=reporter
+        progress_reporter=reporter,
+        local_dir=args.local_dir_path
     )
 
     print("Best hyperparameters found were: ", analysis.best_config)
     best_trial = analysis.get_best_trial(metric="eval_loss", mode="min")
     best_model_path = best_trial.checkpoint.path
 
-    shutil.copytree(best_model_path, "/data/lab/Project2/best_model")
+    shutil.copytree(best_model_path, "/openbayes/home/best_model")
     print("The best model has been successfully saved as 'best_model'.")
 
 if __name__ == "__main__":
@@ -170,10 +175,13 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, required=True, help="Model name or path.")
     parser.add_argument("--train_dataset_path", type=str, required=True, help="Path to save/load the processed training dataset.")
     parser.add_argument("--valid_dataset_path", type=str, required=True, help="Path to save/load the processed validation dataset.")
+    parser.add_argument("--output_dir_path", type=str, required=True, help="Path to save the checkpoints")
+    parser.add_argument("--local_dir_path", type=str, required=True, help="Path to save the Running analysis")
     parser.add_argument("--num_samples", type=int, default=8, help="Number of samples for hyperparameter tuning.")
     parser.add_argument("--cpus_per_trial", type=int, default=3, help="Number of CPUs per trial.")
     parser.add_argument("--gpus_per_trial", type=int, default=0, help="Number of GPUs per trial.")
     parser.add_argument("--smoke_test", action="store_true", help="Run a smoke test.")
+    
 
     args = parser.parse_args()
 

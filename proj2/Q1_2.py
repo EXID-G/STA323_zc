@@ -1,13 +1,12 @@
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["RAY_memory_usage_threshold"] = "0.8"
-os.environ["RAY_memory_monitor_refresh_ms"] = "0"
+# os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# os.environ["RAY_memory_usage_threshold"] = "0.8"
+# os.environ["RAY_memory_monitor_refresh_ms"] = "0"
 
 # 设置环境变量以禁用严格的度量检查
 os.environ["TUNE_DISABLE_STRICT_METRIC_CHECKING"] = "1"
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
-
 import pickle
 import shutil
 import tempfile
@@ -28,7 +27,7 @@ from transformers import (
 from ray.air import session
 import ray.train.huggingface.transformers
 from ray.tune import CLIReporter
-from ray.tune.schedulers import ASHAScheduler
+from ray.tune.schedulers import ASHAScheduler,PopulationBasedTraining
 from ray import tune
 
 
@@ -38,10 +37,10 @@ def preprocess_function(examples,mytokenizer):
     targets = [str(ex) for ex in examples['output']]
 
     # Tokenize inputs
-    model_inputs = mytokenizer(inputs, max_length=384, padding= True, truncation=True)
+    model_inputs = mytokenizer(inputs, max_length=384, padding= True, truncation=True,return_tensors="pt")
     # Tokenize targets
     # with tokenizer.as_target_tokenizer():
-    labels = mytokenizer(targets, max_length=30,padding = True,truncation=True)
+    labels = mytokenizer(targets, max_length=30,padding = True,truncation=True,return_tensors="pt")
     # Add labels to model inputs
     model_inputs['labels'] = labels['input_ids']
     return model_inputs
@@ -110,18 +109,18 @@ def train_func(config):
     train_dataset, val_dataset, test_dataset = load_and_preprocess_datasets(tokenizer,config)
 
     ###################################* metrix
-    def compute_metrics(p):
-        predictions, labels = p
+#     def compute_metrics(p):
+#         predictions, labels = p
 
-        if isinstance(predictions, tuple):
-            predictions = predictions[0]
-        predictions = np.argmax(predictions, axis=-1)
+#         if isinstance(predictions, tuple):
+#             predictions = predictions[0]
+#         predictions = np.argmax(predictions, axis=-1)
 
-        predictions = predictions.flatten()
-        labels = labels.flatten()
+#         predictions = predictions.flatten()
+#         labels = labels.flatten()
 
-        metric = load_metric("accuracy")
-        return metric.compute(predictions=predictions, references=labels)
+#         metric = load_metric("accuracy")
+#         return metric.compute(predictions=predictions, references=labels)
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=config["output_dir"],
@@ -136,24 +135,26 @@ def train_func(config):
         metric_for_best_model="eval_loss", # 选择最佳模型的指标
         greater_is_better=False,  # 表示更小的评估损失表示更好的模型
         save_strategy="epoch",  # 表示每个训练周期结束后保存模型
-        evaluation_strategy="epoch", # 每个训练周期结束后评估模型
+        eval_strategy="epoch", # 每个训练周期结束后评估模型
         fp16=True,  # enable mixed precision training
     )
         
-    data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
+    # data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
+    data_collator = DataCollatorForSeq2Seq(tokenizer)
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         tokenizer=tokenizer,
+        # compute_metrics=compute_metrics,
         data_collator=data_collator,
-        callbacks=[ray.train.huggingface.transformers.RayTrainReportCallback()]
-#         callbacks=[ray.train.huggingface.transformers.RayTrainReportCallback(), SaveTokenizerCallback(tokenizer, config["output_dir"])]
+        # callbacks=[ray.train.huggingface.transformers.RayTrainReportCallback()]
+        # callbacks=[ray.train.huggingface.transformers.RayTrainReportCallback(), SaveTokenizerCallback(tokenizer, config["output_dir"])]
 
     )
 
-    trainer = ray.train.huggingface.transformers.prepare_trainer(trainer)
+    # trainer = ray.train.huggingface.transformers.prepare_trainer(trainer)
     trainer.train()
 
     # 评估模型
@@ -168,8 +169,8 @@ def train_func(config):
     
     with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
         trainer.save_model(temp_checkpoint_dir)
-        trainer.save_state()
-        trainer.save_metrics("eval", eval_results)
+        # trainer.save_state()
+        # trainer.save_metrics("eval", eval_results)
         tokenizer.save_pretrained(temp_checkpoint_dir)
         
         session.report(
@@ -182,8 +183,8 @@ def train_func(config):
     
     # # Save the trained model checkpoint
     # with tune.checkpoint_dir(step=trainer.state.global_step) as checkpoint_dir:
-    #     model.save_pretrained(checkpoint_dir)
-    #     tokenizer.save_pretrained(checkpoint_dir)
+        # model.save_pretrained(checkpoint_dir)
+        # tokenizer.save_pretrained(checkpoint_dir)
 
 def tune_transformer(args):
     tune_config = {
@@ -203,39 +204,56 @@ def tune_transformer(args):
     }
 
     scheduler = tune.schedulers.ASHAScheduler(
-        metric="eval_accuracy",
-        mode="max",
+        # metric="eval_loss",
+        # mode="min",
         max_t=10,
         grace_period=1,
         reduction_factor=2
     )
+    
+    pbt = PopulationBasedTraining(
+        time_attr="training_iteration",
+        perturbation_interval=2,
+        hyperparam_mutations={
+            "learning_rate": tune.loguniform(1e-5, 1e-3),
+            "per_device_train_batch_size": [4, 6, 8],
+        }
+    )
+        
     reporter = CLIReporter(
         parameter_columns=["learning_rate", "num_train_epochs", "weight_decay"],
         metric_columns=["eval_accuracy", "eval_loss", "epoch", "training_iteration"],
-        max_report_frequency=1,  # 控制报告频率
+        max_report_frequency=10,  # 控制报告频率
         print_intermediate_tables=False  # 关闭中间表格输出
     )
     analysis = tune.run(
-        train_func,
+        tune.with_parameters(train_func),
+        metric="eval_loss",
+        mode="min",
         resources_per_trial={"cpu": 19, "gpu":2},  # Adjust as needed
         config=tune_config,
         num_samples=3,  # Number of trials
-        scheduler=scheduler,
+        scheduler=pbt,
         progress_reporter=reporter,
         name="tune_qa_model",
-        storage_path=args.local_dir,   # 指定了存储调优结果的本地目录路径
-        stop={"training_iteration": 2},
-        keep_checkpoints_num=3,  # 限制保存的 checkpoint 数量
-        checkpoint_score_attr="eval_acc",  # 根据验证集的准确率选择保留的 checkpoint
+        # storage_path=args.local_dir,   # 指定了存储调优结果的本地目录路径
+        local_dir=args.local_dir,   # 指定了存储调优结果的本地目录路径
+        # stop={"training_iteration": 2},
+        # keep_checkpoints_num=3,  # 限制保存的 checkpoint 数量
     )
 
-    # print("Best hyperparameters found were: ", analysis.best_config(metric="eval_loss", mode="min"))
+    # print("Best hyperparameters found were: ", analysis.best_config)
+    print("Best hyperparameters found were: ", analysis.best_config)
     best_trial = analysis.get_best_trial(metric="eval_loss", mode="min")
     best_model_path = best_trial.checkpoint.path
     # 创建目标文件夹路径
     destination_path = args.bestmodel_dir
     # 复制整个目录
+    print(best_model_path)
     shutil.copytree(best_model_path, destination_path)
+    # model.save_pretrained(args.bestmodel_dir)
+    print("The best model has been successfully saved as 'best_model'.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
