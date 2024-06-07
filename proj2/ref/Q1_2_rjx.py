@@ -47,6 +47,7 @@ def train_func(config):
 
     model_name = config["model_name"]
     tokenizer = T5Tokenizer.from_pretrained(model_name)
+    model = T5ForConditionalGeneration.from_pretrained(model_name)
 
     try:
         with open(config["train_dataset_path"], 'rb') as f:
@@ -65,7 +66,6 @@ def train_func(config):
 
     data_collator = DataCollatorForSeq2Seq(tokenizer)
 
-    model = T5ForConditionalGeneration.from_pretrained(model_name)
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=config["output_dir_path"],

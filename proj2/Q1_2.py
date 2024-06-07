@@ -17,6 +17,7 @@ import ray
 from datasets import load_dataset, load_metric, Dataset
 from transformers import (
     AutoTokenizer,
+    T5Tokenizer,
     DataCollatorForSeq2Seq,
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
@@ -102,7 +103,8 @@ def load_and_preprocess_datasets(my_tokenizer,config):
             
 def train_func(config):
     ###################################* load model and tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(config["model_path"])
+    # tokenizer = AutoTokenizer.from_pretrained(config["model_path"])
+    tokenizer = T5Tokenizer.from_pretrained(config["model_path"])
     model = T5ForConditionalGeneration.from_pretrained(config["model_path"])
 
     ###################################* load data
@@ -136,6 +138,7 @@ def train_func(config):
         greater_is_better=False,  # 表示更小的评估损失表示更好的模型
         save_strategy="epoch",  # 表示每个训练周期结束后保存模型
         eval_strategy="epoch", # 每个训练周期结束后评估模型
+        # fp16=False,  # enable mixed precision training
         fp16=True,  # enable mixed precision training
     )
         
@@ -169,8 +172,8 @@ def train_func(config):
     
     with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
         trainer.save_model(temp_checkpoint_dir)
-        # trainer.save_state()
-        # trainer.save_metrics("eval", eval_results)
+        trainer.save_state()
+        trainer.save_metrics("eval", eval_results)
         tokenizer.save_pretrained(temp_checkpoint_dir)
         
         session.report(
@@ -211,14 +214,14 @@ def tune_transformer(args):
         reduction_factor=2
     )
     
-    pbt = PopulationBasedTraining(
-        time_attr="training_iteration",
-        perturbation_interval=2,
-        hyperparam_mutations={
-            "learning_rate": tune.loguniform(1e-5, 1e-3),
-            "per_device_train_batch_size": [4, 6, 8],
-        }
-    )
+    # pbt = PopulationBasedTraining(
+    #     time_attr="training_iteration",
+    #     perturbation_interval=2,
+    #     hyperparam_mutations={
+    #         "learning_rate": tune.loguniform(1e-5, 1e-3),
+    #         "per_device_train_batch_size": [4, 6, 8],
+    #     }
+    # )
         
     reporter = CLIReporter(
         parameter_columns=["learning_rate", "num_train_epochs", "weight_decay"],
@@ -231,15 +234,16 @@ def tune_transformer(args):
         metric="eval_loss",
         mode="min",
         resources_per_trial={"cpu": 19, "gpu":2},  # Adjust as needed
+        # resources_per_trial={"cpu": 3, "gpu":0},  # Adjust as needed
         config=tune_config,
         num_samples=3,  # Number of trials
-        scheduler=pbt,
+        scheduler=scheduler,
         progress_reporter=reporter,
         name="tune_qa_model",
-        # storage_path=args.local_dir,   # 指定了存储调优结果的本地目录路径
-        local_dir=args.local_dir,   # 指定了存储调优结果的本地目录路径
+        storage_path=args.local_dir,   # 指定了存储调优结果的本地目录路径
+        # local_dir=args.local_dir,   # 指定了存储调优结果的本地目录路径
         # stop={"training_iteration": 2},
-        # keep_checkpoints_num=3,  # 限制保存的 checkpoint 数量
+        keep_checkpoints_num=3,  # 限制保存的 checkpoint 数量
     )
 
     # print("Best hyperparameters found were: ", analysis.best_config)

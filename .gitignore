@@ -15,9 +15,9 @@ ass3/output/
 
 # proj2/data/
 proj2/data/
-proj2/nlp_flan-t5-small
 proj2/flan-t5-small/
-
+proj2/best_model.zip
 testrjx/
 
 proj2/onnx_models
+proj2/best_model
